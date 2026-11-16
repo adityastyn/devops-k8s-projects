@@ -1,0 +1,64 @@
+// Project 1: CI/CD pipeline to deploy a Dockerized application on Kubernetes using Jenkins
+pipeline {
+    agent any
+    options { timestamps(); disableConcurrentBuilds(); buildDiscarder(logRotator(numToKeepStr: '15')) }
+    triggers { pollSCM('H/2 * * * *') }
+    environment {
+        APP   = 'campusevents'
+        NS    = 'campusevents'
+        IMAGE = "campusevents:${env.BUILD_NUMBER}"
+        DIR   = 'p1-k8s-cicd'
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                sh 'git log -1 --pretty="Commit %h by %an: %s"'
+            }
+        }
+        stage('Unit Tests') {
+            steps { sh 'docker build --target test -t ${APP}-test:${BUILD_NUMBER} ${DIR}/app' }
+        }
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build --target runtime -t ${IMAGE} -t ${APP}:latest ${DIR}/app'
+                sh 'docker image ls ${APP} --format "{{.Repository}}:{{.Tag}}  {{.Size}}" | head -3'
+            }
+        }
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh '''
+                  sed -e "s|IMAGE_PLACEHOLDER|${IMAGE}|g" -e "s|VERSION_PLACEHOLDER|build-${BUILD_NUMBER}|g" ${DIR}/k8s/app.yaml | kubectl apply -f -
+                '''
+            }
+        }
+        stage('Rollout Status') {
+            steps { sh 'kubectl -n ${NS} rollout status deployment/${APP} --timeout=180s' }
+        }
+        stage('Smoke Test') {
+            steps {
+                sh '''
+                  for i in $(seq 1 20); do
+                    if curl -fsS http://${APP}.${NS}.svc.cluster.local/health | grep -q "build-${BUILD_NUMBER}"; then
+                      echo "Smoke test passed:"; curl -fsS http://${APP}.${NS}.svc.cluster.local/health; echo; exit 0
+                    fi
+                    sleep 3
+                  done
+                  echo "Smoke test failed"; exit 1
+                '''
+            }
+        }
+    }
+    post {
+        success {
+            sh 'kubectl -n ${NS} get deploy,rs,pods,svc -o wide'
+            sh 'kubectl -n ${NS} rollout history deployment/${APP}'
+            echo 'App live at http://localhost:30080'
+        }
+        failure {
+            sh 'kubectl -n ${NS} rollout undo deployment/${APP} || true'
+            echo 'Deployment failed - rolled back to the previous ReplicaSet.'
+        }
+        always { sh 'docker rmi ${APP}-test:${BUILD_NUMBER} >/dev/null 2>&1 || true' }
+    }
+}

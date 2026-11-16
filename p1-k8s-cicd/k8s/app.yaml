@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: campusevents
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: campusevents
+  namespace: campusevents
+  labels: { app: campusevents }
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }   # zero-downtime rolling update
+  selector:
+    matchLabels: { app: campusevents }
+  template:
+    metadata:
+      labels: { app: campusevents }
+      annotations:
+        kubernetes.io/change-cause: "Jenkins build VERSION_PLACEHOLDER"
+    spec:
+      containers:
+        - name: campusevents
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 3000 }]
+          env:
+            - { name: APP_VERSION, value: VERSION_PLACEHOLDER }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: campusevents
+  namespace: campusevents
+spec:
+  type: NodePort
+  selector: { app: campusevents }
+  ports:
+    - port: 80
+      targetPort: 3000
+      nodePort: 30080

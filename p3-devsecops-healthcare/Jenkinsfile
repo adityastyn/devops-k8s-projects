@@ -1,0 +1,110 @@
+// Project 3: Secure DevOps (DevSecOps) pipeline for the MediSecure healthcare system
+// Security gates: secrets -> SAST -> Dockerfile lint -> tests -> image CVE scan -> K8s config scan -> deploy -> DAST
+pipeline {
+    agent any
+    options { timestamps(); disableConcurrentBuilds(); buildDiscarder(logRotator(numToKeepStr: '15')); timeout(time: 45, unit: 'MINUTES') }
+    triggers { pollSCM('H/2 * * * *') }
+    environment {
+        APP   = 'medisecure'
+        NS    = 'healthcare'
+        DIR   = 'p3-devsecops-healthcare'
+        IMAGE = "medisecure:${env.BUILD_NUMBER}"
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    // Same workspace as seen by the node's Docker engine, so scanner containers can mount it
+                    env.HOST_WS = env.WORKSPACE.replace('/var/jenkins_home', env.HOST_JENKINS_HOME)
+                }
+                sh 'rm -rf reports && mkdir -p reports && chmod 777 reports'
+            }
+        }
+        stage('Secret Scan (Gitleaks)') {
+            steps {
+                sh '''
+                  docker run --rm -v ${HOST_WS}:/repo zricethezav/gitleaks:latest \
+                    detect --no-git --source /repo/${DIR} --redact \
+                    --report-format json --report-path /repo/reports/gitleaks.json --exit-code 1
+                  echo "No hard-coded secrets found."
+                '''
+            }
+        }
+        stage('SAST (Semgrep)') {
+            steps {
+                sh '''
+                  docker run --rm -v ${HOST_WS}:/src -w /src semgrep/semgrep:latest \
+                    semgrep scan --config p/javascript --config p/nodejsscan --config p/secrets \
+                    --severity ERROR --error --json --output reports/semgrep.json ${DIR}/app
+                  echo "Semgrep: no ERROR-severity findings."
+                '''
+            }
+        }
+        stage('Dockerfile Lint (Hadolint)') {
+            steps {
+                sh 'docker run --rm -i hadolint/hadolint:latest hadolint --failure-threshold error - < ${DIR}/app/Dockerfile | tee reports/hadolint.txt'
+            }
+        }
+        stage('Unit & Security Tests') {
+            steps { sh 'docker build --target test -t ${APP}-test:${BUILD_NUMBER} ${DIR}/app' }
+        }
+        stage('Build Hardened Image') {
+            steps { sh 'docker build --target runtime -t ${IMAGE} ${DIR}/app' }
+        }
+        stage('Image Vulnerability Scan (Trivy)') {
+            steps {
+                sh '''
+                  TRIVY="docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v trivy-cache:/root/.cache -v ${HOST_WS}/reports:/reports aquasec/trivy:latest"
+                  $TRIVY image --scanners vuln --severity LOW,MEDIUM,HIGH,CRITICAL --format table --output /reports/trivy-image.txt ${IMAGE}
+                  $TRIVY image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 ${IMAGE}
+                  echo "Security gate passed: no fixable HIGH/CRITICAL vulnerabilities in ${IMAGE}"
+                '''
+            }
+        }
+        stage('K8s Manifest Scan (Trivy config)') {
+            steps {
+                sh '''
+                  docker run --rm -v trivy-cache:/root/.cache -v ${HOST_WS}:/src aquasec/trivy:latest \
+                    config --severity HIGH,CRITICAL --exit-code 1 /src/${DIR}/k8s | tee reports/trivy-k8s.txt
+                '''
+            }
+        }
+        stage('Deploy (Secret + Hardened Manifests)') {
+            steps {
+                sh '''
+                  kubectl apply -f ${DIR}/k8s/namespace.yaml
+                  sed -e "s|IMAGE_PLACEHOLDER|${IMAGE}|g" -e "s|VERSION_PLACEHOLDER|build-${BUILD_NUMBER}|g" ${DIR}/k8s/app.yaml > /tmp/medisecure.yaml
+                  # API key lives only in a Kubernetes Secret - generated once, never stored in Git or printed
+                  if ! kubectl -n ${NS} get secret medisecure-secret >/dev/null 2>&1; then
+                    KEY=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n')
+                    kubectl -n ${NS} create secret generic medisecure-secret --from-literal=API_KEY="$KEY" >/dev/null
+                    echo "Created Secret medisecure-secret"
+                  fi
+                  kubectl apply -f /tmp/medisecure.yaml
+                  kubectl -n ${NS} rollout status deployment/${APP} --timeout=180s
+                '''
+            }
+        }
+        stage('DAST (OWASP ZAP Baseline)') {
+            steps {
+                sh '''
+                  docker run --rm -v ${HOST_WS}/reports:/zap/wrk:rw ghcr.io/zaproxy/zaproxy:stable \
+                    zap-baseline.py -t http://host.docker.internal:30090 -r zap-report.html -J zap-report.json -I
+                  echo "ZAP baseline complete - see zap-report.html"
+                '''
+            }
+        }
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'reports/**', allowEmptyArchive: true
+            sh 'docker rmi ${APP}-test:${BUILD_NUMBER} >/dev/null 2>&1 || true'
+        }
+        success {
+            sh 'kubectl -n ${NS} get deploy,pods,svc,networkpolicy,secret -o wide'
+            echo 'All security gates passed. MediSecure is live at http://localhost:30090'
+        }
+        failure { echo 'A security gate failed - the release was blocked. See the stage log and archived reports.' }
+    }
+}

@@ -1,0 +1,31 @@
+jenkins:
+  systemMessage: "DevOps Lab - Jenkins on Kubernetes | Aditya Satyanarayanan (RA2311003011659) & Chirag Khodiyar (RA2311003011664)"
+  numExecutors: 2
+  # Local lab instance reachable only on this PC (localhost:32000)
+  authorizationStrategy: unsecured
+  securityRealm: none
+unclassified:
+  location:
+    url: "http://localhost:32000/"
+jobs:
+  - script: |
+      def jobs = [
+        ['P1-K8s-CICD',        'p1-k8s-cicd/Jenkinsfile',            'Project 1: CI/CD pipeline deploying a Dockerized app to Kubernetes'],
+        ['P2-BlueGreen-K8s',   'p2-bluegreen-k8s/Jenkinsfile',       'Project 2: Automated Blue-Green deployment with Jenkins, Kubernetes and Docker'],
+        ['P3-DevSecOps-Healthcare', 'p3-devsecops-healthcare/Jenkinsfile', 'Project 3: DevSecOps pipeline for a healthcare records system']
+      ]
+      jobs.each { j ->
+        pipelineJob(j[0]) {
+          description(j[2])
+          properties {
+            pipelineTriggers { triggers { pollSCM { scmpoll_spec('H/2 * * * *') } } }
+          }
+          definition {
+            cpsScm {
+              scm { git { remote { url('${REPO_URL}') }; branch('*/main') } }
+              scriptPath(j[1])
+              lightweight(true)
+            }
+          }
+        }
+      }

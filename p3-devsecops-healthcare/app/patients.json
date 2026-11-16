@@ -1,0 +1,8 @@
+[
+  { "id": "P001", "name": "Ananya Rao", "age": 34, "gender": "F", "bloodGroup": "B+", "ward": "Cardiology", "condition": "Hypertension", "phone": "9840012345", "aadhaar": "123456781234" },
+  { "id": "P002", "name": "Rahul Menon", "age": 52, "gender": "M", "bloodGroup": "O+", "ward": "Endocrinology", "condition": "Type 2 Diabetes", "phone": "9876501122", "aadhaar": "234567892345" },
+  { "id": "P003", "name": "Fatima Sheikh", "age": 27, "gender": "F", "bloodGroup": "A-", "ward": "Pulmonology", "condition": "Asthma", "phone": "9123407788", "aadhaar": "345678903456" },
+  { "id": "P004", "name": "Vikram Iyer", "age": 61, "gender": "M", "bloodGroup": "AB+", "ward": "Orthopaedics", "condition": "Knee replacement recovery", "phone": "9001122334", "aadhaar": "456789014567" },
+  { "id": "P005", "name": "Meera Pillai", "age": 45, "gender": "F", "bloodGroup": "O-", "ward": "Neurology", "condition": "Migraine", "phone": "9445566778", "aadhaar": "567890125678" },
+  { "id": "P006", "name": "Arjun Das", "age": 8, "gender": "M", "bloodGroup": "B-", "ward": "Paediatrics", "condition": "Viral fever", "phone": "9887766554", "aadhaar": "678901236789" }
+]

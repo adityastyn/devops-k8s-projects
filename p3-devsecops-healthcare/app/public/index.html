@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MediSecure – Patient Records</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>MediSecure</h1>
+    <p>Patient records with privacy built in</p>
+  </header>
+  <main>
+    <section class="login" id="login">
+      <h2>Clinician access</h2>
+      <p>Enter the access key issued to your department.</p>
+      <form id="keyForm">
+        <label for="key">Access key</label>
+        <input id="key" type="password" autocomplete="off" required>
+        <button type="submit">View patients</button>
+        <p id="error" class="error" role="alert"></p>
+      </form>
+    </section>
+    <section id="records" hidden>
+      <div class="bar"><h2>Patients</h2><button id="lock" class="ghost">Lock</button></div>
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Age</th><th>Blood</th><th>Ward</th><th>Condition</th><th>Phone</th><th>Aadhaar</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="note">Phone and Aadhaar numbers are masked by the server. Every access is written to the audit log.</p>
+    </section>
+    <ul class="controls">
+      <li>Access key stored in a Kubernetes Secret</li>
+      <li>Strict security headers and CSP</li>
+      <li>Rate limiting and audit logging</li>
+      <li>Runs as non-root with a read-only filesystem</li>
+    </ul>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

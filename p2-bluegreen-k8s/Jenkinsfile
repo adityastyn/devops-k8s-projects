@@ -1,0 +1,100 @@
+// Project 2: Automated Blue-Green deployment strategy using Jenkins, Kubernetes and Docker
+pipeline {
+    agent any
+    options { timestamps(); disableConcurrentBuilds(); buildDiscarder(logRotator(numToKeepStr: '15')) }
+    triggers { pollSCM('H/2 * * * *') }
+    parameters {
+        choice(name: 'ACTION', choices: ['deploy', 'rollback'], description: 'deploy = release a new build to the idle colour; rollback = switch live traffic back to the previous colour')
+    }
+    environment {
+        NS  = 'bluegreen'
+        DIR = 'p2-bluegreen-k8s'
+        IMAGE = "brewbox:${env.BUILD_NUMBER}"
+    }
+    stages {
+        stage('Checkout') {
+            steps { checkout scm }
+        }
+        stage('Detect Live Colour') {
+            steps {
+                script {
+                    sh 'kubectl get ns ${NS} >/dev/null 2>&1 || kubectl apply -f ${DIR}/k8s/services.yaml'
+                    def blueUp  = sh(script: 'kubectl -n ${NS} get deploy brewbox-blue  >/dev/null 2>&1', returnStatus: true) == 0
+                    def live    = sh(script: 'kubectl -n $NS get svc brewbox-live -o jsonpath="{.spec.selector.color}"', returnStdout: true).trim()
+                    env.LIVE   = blueUp ? live : 'none'
+                    env.TARGET = (env.LIVE == 'blue') ? 'green' : 'blue'
+                    if (params.ACTION == 'rollback') { env.TARGET = env.LIVE == 'blue' ? 'green' : 'blue' }
+                    echo "Live colour: ${env.LIVE}  ->  target colour: ${env.TARGET}  (action: ${params.ACTION})"
+                }
+            }
+        }
+        stage('Unit Tests') {
+            when { expression { params.ACTION == 'deploy' } }
+            steps { sh 'docker build --target test -t brewbox-test:${BUILD_NUMBER} ${DIR}/app' }
+        }
+        stage('Build Docker Image') {
+            when { expression { params.ACTION == 'deploy' } }
+            steps { sh 'docker build --target runtime -t ${IMAGE} ${DIR}/app' }
+        }
+        stage('Deploy to Idle Colour') {
+            when { expression { params.ACTION == 'deploy' } }
+            steps {
+                sh '''
+                  sed -e "s|__COLOR__|${TARGET}|g" -e "s|IMAGE_PLACEHOLDER|${IMAGE}|g" -e "s|VERSION_PLACEHOLDER|build-${BUILD_NUMBER}|g" \
+                      ${DIR}/k8s/deployment.yaml | kubectl apply -f -
+                  kubectl -n ${NS} rollout status deployment/brewbox-${TARGET} --timeout=180s
+                '''
+            }
+        }
+        stage('Test Idle Colour (Preview)') {
+            steps {
+                sh '''
+                  kubectl -n ${NS} get deploy brewbox-${TARGET} >/dev/null
+                  kubectl -n ${NS} patch svc brewbox-preview -p "{\\"spec\\":{\\"selector\\":{\\"app\\":\\"brewbox\\",\\"color\\":\\"${TARGET}\\"}}}"
+                  for i in $(seq 1 20); do
+                    if curl -fsS http://brewbox-preview.${NS}.svc.cluster.local/health | grep -q "\\"color\\":\\"${TARGET}\\""; then
+                      echo "Preview OK:"; curl -fsS http://brewbox-preview.${NS}.svc.cluster.local/health; echo; exit 0
+                    fi
+                    sleep 3
+                  done
+                  echo "Idle colour failed its health check - live traffic NOT switched"; exit 1
+                '''
+            }
+        }
+        stage('Switch Live Traffic') {
+            steps {
+                sh '''
+                  kubectl -n ${NS} patch svc brewbox-live -p "{\\"spec\\":{\\"selector\\":{\\"app\\":\\"brewbox\\",\\"color\\":\\"${TARGET}\\"}}}"
+                  echo "Live service brewbox-live now routes to: ${TARGET}"
+                '''
+            }
+        }
+        stage('Verify Live') {
+            steps {
+                sh '''
+                  for i in $(seq 1 10); do
+                    if curl -fsS http://brewbox-live.${NS}.svc.cluster.local/health | grep -q "\\"color\\":\\"${TARGET}\\""; then
+                      echo "Verified: live traffic served by ${TARGET}"; exit 0
+                    fi
+                    sleep 2
+                  done
+                  echo "Verification failed - switching back to ${LIVE}"
+                  [ "${LIVE}" != "none" ] && kubectl -n ${NS} patch svc brewbox-live -p "{\\"spec\\":{\\"selector\\":{\\"app\\":\\"brewbox\\",\\"color\\":\\"${LIVE}\\"}}}"
+                  exit 1
+                '''
+            }
+        }
+    }
+    post {
+        success {
+            sh '''
+              [ "${LIVE}" != "none" ] && kubectl -n ${NS} patch svc brewbox-preview -p "{\\"spec\\":{\\"selector\\":{\\"app\\":\\"brewbox\\",\\"color\\":\\"${LIVE}\\"}}}" || true
+              echo "----- Blue-Green status -----"
+              kubectl -n ${NS} get svc -o custom-columns=SERVICE:.metadata.name,COLOUR:.spec.selector.color,NODEPORT:.spec.ports[0].nodePort
+              kubectl -n ${NS} get deploy -L color -o wide
+            '''
+            echo "Live: http://localhost:30081   Preview (previous colour, instant rollback): http://localhost:30082"
+        }
+        always { sh 'docker rmi brewbox-test:${BUILD_NUMBER} >/dev/null 2>&1 || true' }
+    }
+}
