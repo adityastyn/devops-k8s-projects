@@ -36,7 +36,7 @@ spec:
             - { name: APP_VERSION, value: VERSION_PLACEHOLDER }
             - name: API_KEY
               valueFrom:
-                secretKeyRef: { name: medisecure-secret, key: API_KEY }
+                secretKeyRef: { name: medisecure-api-key, key: API_KEY }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

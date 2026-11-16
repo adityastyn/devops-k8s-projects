@@ -75,12 +75,16 @@ pipeline {
                 sh '''
                   kubectl apply -f ${DIR}/k8s/namespace.yaml
                   sed -e "s|IMAGE_PLACEHOLDER|${IMAGE}|g" -e "s|VERSION_PLACEHOLDER|build-${BUILD_NUMBER}|g" ${DIR}/k8s/app.yaml > /tmp/medisecure.yaml
-                  # API key lives only in a Kubernetes Secret - generated once, never stored in Git or printed
-                  if ! kubectl -n ${NS} get secret medisecure-secret >/dev/null 2>&1; then
-                    KEY=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n')
-                    kubectl -n ${NS} create secret generic medisecure-secret --from-literal=API_KEY="$KEY" >/dev/null
-                    echo "Created Secret medisecure-secret"
+                  # API key lives only in a Kubernetes Secret - generated once, never stored in Git or printed.
+                  # Command echo is switched off so the value can never appear in the build log.
+                  set +x
+                  kubectl -n ${NS} delete secret medisecure-secret --ignore-not-found >/dev/null   # retire legacy secret
+                  if ! kubectl -n ${NS} get secret medisecure-api-key >/dev/null 2>&1; then
+                    kubectl -n ${NS} create secret generic medisecure-api-key \
+                      --from-literal=API_KEY="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n')" >/dev/null
+                    echo "Created Secret medisecure-api-key (value not logged)"
                   fi
+                  set -x
                   kubectl apply -f /tmp/medisecure.yaml
                   kubectl -n ${NS} rollout status deployment/${APP} --timeout=180s
                 '''
